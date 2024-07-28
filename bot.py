@@ -9,6 +9,7 @@ import uuid
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
+import time, date
 
 # Import configuration
 from config import Config
@@ -202,14 +203,14 @@ def upload_file():
         # Clean up files
         if os.path.exists(video_filename):
             os.remove(video_filename)
-        if os.path.exists(tts_audio_file):
+        if os.exists(tts_audio_file):
             os.remove(tts_audio_file)
-        if os.path.exists(output_video_file):
+        if os.exists(output_video_file):
             os.remove(output_video_file)
 
 # Function to run Flask app
 def run_flask():
-    flask_app.run(debug=True, host="0.0.0.0", port=8030)
+    flask_app.run(debug=True, host="0.0.0.0", port=5000)
 
 # Function to run Pyrogram bot
 async def run_bot():
@@ -218,4 +219,6 @@ async def run_bot():
 
 # Main entry point
 if __name__ == "__main__":
-    app.run()
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
+    asyncio.run(run_bot())
