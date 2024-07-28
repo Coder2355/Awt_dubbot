@@ -1,0 +1,4 @@
+pyrogram==2.0.30
+gtts==2.2.3
+flask==2.0.3
+ffmpeg-python==0.2.0
