@@ -218,5 +218,4 @@ async def run_bot():
 
 # Main entry point
 if __name__ == "__main__":
-    flask_thread = Thread(target=run_flask)
-    flask_thread
+    app.run()
