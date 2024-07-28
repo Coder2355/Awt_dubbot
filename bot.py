@@ -6,7 +6,6 @@ import asyncio
 import subprocess
 from werkzeug.utils import secure_filename
 import aiofiles
-import aiohttp
 import config
 import threading
 
@@ -90,10 +89,13 @@ async def anime_voice_dub(client: Client, message: Message):
     
     # Inform user to upload the voice file
     await message.reply("Please send the character voice file (audio) as the next message.")
+    # Save the message ID for reference
+    original_message_id = message.message_id
 
     @app_pyrogram.on_message(filters.audio & filters.reply)
     async def receive_voice_file(client: Client, voice_message: Message):
-        if voice_message.reply_to_message.message_id == message.message_id:
+        # Ensure the reply is to the correct message
+        if voice_message.reply_to_message and voice_message.reply_to_message.message_id == original_message_id:
             voice = voice_message.audio
             voice_path = f"{config.UPLOAD_FOLDER}/{voice.file_id}.mp3"
             
@@ -117,7 +119,7 @@ async def start(client: Client, message: Message):
 
 async def save_file(file, path):
     async with aiofiles.open(path, 'wb') as f:
-        await f.write(file.read())
+        await f.write(await file.read())
 
 if __name__ == "__main__":
     app_pyrogram.run()
