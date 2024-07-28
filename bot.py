@@ -207,4 +207,11 @@ def upload_file():
             os.remove(output_video_file)
 
 if __name__ == "__main__":
-    app.run()
+    # Run the Pyrogram bot
+    app.start()
+
+    # Run the Flask app
+    flask_app.run(debug=True, host="0.0.0.0", port=5000)
+
+    # Stop the Pyrogram bot
+    app.stop()
