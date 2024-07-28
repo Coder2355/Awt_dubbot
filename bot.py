@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 import time
 from datetime import datetime
-import ntplib
 
 # Import configuration
 from config import Config
@@ -221,7 +220,7 @@ def synchronize_time():
 
 # Function to run Flask app
 def run_flask():
-    flask_app.run(debug=True, host="0.0.0.0", port=5000)
+    flask_app.run(debug=True, host="0.0.0.0", port=8000)
 
 # Function to run Pyrogram bot
 async def run_bot():
