@@ -1,123 +1,109 @@
 import os
-import subprocess
-import json
-from datetime import datetime
+import shutil
+import time
+from threading import Thread
+from flask import Flask, jsonify
+import speech_recognition as sr
+from pydub import AudioSegment
 from pyrogram import Client, filters
-import requests
-from gtts import gTTS
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from transformers import pipeline
+import torchaudio
 import config
 
-app = Client("anime_dub_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
+# Initialize the Pyrogram Client
+app = Client("anime_tamil_dub_bot", bot_token=config.BOT_TOKEN, api_id=config.API_ID, api_hash=config.API_HASH)
 
-# Create directories if they don't exist
-if not os.path.exists(config.VOICE_DIR):
-    os.makedirs(config.VOICE_DIR)
-if not os.path.exists(config.DOWNLOAD_DIR):
-    os.makedirs(config.DOWNLOAD_DIR)
+# Initialize Flask app
+flask_app = Flask(__name__)
 
-# Load existing voice map or create a new one
-if os.path.exists(config.VOICE_MAP_FILE):
-    with open(config.VOICE_MAP_FILE, "r") as f:
-        voice_map = json.load(f)
-else:
-    voice_map = {}
+# Initialize the speech recognition and translation pipelines
+recognizer = sr.Recognizer()
+translation_pipeline = pipeline("translation", model="Helsinki-NLP/opus-mt-en-tam")
+voice_clone_model = ...  # Initialize your voice cloning model
 
-# Dictionary to keep track of users adding voices
-adding_voice_for = {}
+# Function to dub the anime video with Tamil audio
+def dub_anime_video(video_path, audio_path, output_path):
+    command = f"ffmpeg -i {video_path} -i {audio_path} -c copy -map 0:v:0 -map 1:a:0 {output_path}"
+    os.system(command)
+    return output_path
 
-# Function to merge video and audio using FFmpeg
-def merge_video_audio(video_path, audio_path, output_path):
-    command = [
-        'ffmpeg', '-i', video_path, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', output_path
-    ]
-    subprocess.run(command)
+# Function to recognize speech from audio
+def recognize_speech(audio_path):
+    audio = sr.AudioFile(audio_path)
+    with audio as source:
+        audio_data = recognizer.record(source)
+    return recognizer.recognize_google(audio_data)
 
-# Function to download video from a URL
-def download_video_from_url(url):
-    response = requests.get(url)
-    video_path = os.path.join(config.DOWNLOAD_DIR, os.path.basename(url))
-    with open(video_path, 'wb') as f:
-        f.write(response.content)
-    return video_path
+# Function to translate text to Tamil
+def translate_to_tamil(text):
+    return translation_pipeline(text)[0]['translation_text']
 
-@app.on_message(filters.command(["start"]))
-def start(client, message):
-    message.reply_text("Welcome to the Anime Dub Bot! Send me a video or a video URL to dub in Tamil or another language with character voices. To add voice for a character, use /addvoice character_name. To dub using text, use /dubtext character_name text_to_dub language_code.")
+# Function to clone voice and generate speech
+def clone_and_generate_speech(text, character_voice_path):
+    # Implement the voice cloning and speech generation logic here
+    pass
 
-@app.on_message(filters.command(["addvoice"]))
-def add_voice(client, message):
-    parts = message.text.split(" ", 1)
-    if len(parts) != 2:
-        message.reply_text("Usage: /addvoice character_name")
-        return
+@app.on_message(filters.command("start"))
+async def start(client, message):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Help", callback_data="help")],
+        [InlineKeyboardButton("Source Code", url="https://github.com/your-repo")]
+    ])
+    await message.reply("Hello! Send me an anime video file and a Tamil audio file with the command /dub.", reply_markup=keyboard)
+
+@app.on_callback_query()
+async def callback_query(client, callback_query):
+    if callback_query.data == "help":
+        await callback_query.message.edit("Use /dub command to dub an anime video with Tamil audio.")
+
+@app.on_message(filters.command("dub") & filters.reply)
+async def dub(client, message):
+    reply = message.reply_to_message
+    start_time = time.time()
     
-    character_name = parts[1].strip()
-    message.reply_text(f"Send me the voice audio for {character_name}.")
-    
-    # Store the character name in the adding_voice_for dictionary
-    adding_voice_for[message.chat.id] = character_name
+    if reply.video and reply.audio:
+        video_file_id = reply.video.file_id
+        audio_file_id = reply.audio.file_id
 
-@app.on_message(filters.audio)
-def receive_voice(client, message):
-    user_id = message.chat.id
-    if user_id not in adding_voice_for:
-        return
+        # Download video and audio files
+        video_path = await client.download_media(video_file_id)
+        audio_path = await client.download_media(audio_file_id)
 
-    character_name = adding_voice_for.pop(user_id)
-    audio_path = os.path.join(config.VOICE_DIR, f"{character_name}.mp3")
-    message.download(audio_path)
-    
-    voice_map[character_name] = audio_path
-    
-    with open(config.VOICE_MAP_FILE, "w") as f:
-        json.dump(voice_map, f)
-    
-    message.reply_text(f"Voice for {character_name} has been added.")
+        # Split the audio into segments for each character
+        segments = split_audio_segments(audio_path)  # Implement this function
 
-@app.on_message(filters.video | filters.text)
-def handle_video(client, message):
-    if message.video:
-        video_path = message.download()
-    elif message.text and message.text.startswith("http"):
-        video_url = message.text.strip()
-        video_path = download_video_from_url(video_url)
+        dubbed_segments = []
+        for segment in segments:
+            character_voice_path = identify_character_voice(segment)  # Implement this function
+            speech_text = recognize_speech(segment)
+            tamil_text = translate_to_tamil(speech_text)
+            tamil_audio_segment = clone_and_generate_speech(tamil_text, character_voice_path)
+            dubbed_segments.append(tamil_audio_segment)
+
+        # Concatenate all the dubbed segments into one audio file
+        dubbed_audio_path = concatenate_audio_segments(dubbed_segments)  # Implement this function
+
+        # Merge the dubbed audio with the video
+        output_path = "dubbed_anime_video.mp4"
+        dub_anime_video(video_path, dubbed_audio_path, output_path)
+
+        end_time = time.time()
+        processing_time = end_time - start_time
+
+        await message.reply_video(output_path, caption=f"Here is your dubbed anime video.\nProcessing time: {processing_time:.2f} seconds.")
+
+        # Clean up the files
+        os.remove(video_path)
+        os.remove(audio_path)
+        os.remove(output_path)
     else:
-        message.reply_text("Send me a video file or a URL to a video.")
-        return
-    
-    # Determine the character's audio (this is a placeholder, logic to determine the character should be added)
-    character = "character1"  # Example character
-    audio_path = voice_map.get(character, None)
-    
-    if not audio_path:
-        message.reply_text(f"No voice found for {character}. Please add a voice using /addvoice character_name.")
-        return
-    
-    output_path = "dubbed_video.mp4"
-    merge_video_audio(video_path, audio_path, output_path)
-    
-    client.send_video(message.chat.id, video=output_path, caption="Here is your dubbed video!")
+        await message.reply("Please reply to a video file and an audio file with the command /dub.")
 
-@app.on_message(filters.command(["dubtext"]))
-def dub_text(client, message):
-    parts = message.text.split(" ", 3)
-    if len(parts) != 4:
-        message.reply_text("Usage: /dubtext character_name text_to_dub language_code")
-        return
+# Flask route for web support
+@flask_app.route('/status', methods=['GET'])
+def status():
+    return jsonify(status="Bot is running", uptime=f"{time.time() - start_time:.2f} seconds")
 
-    character_name = parts[1].strip()
-    text_to_dub = parts[2].strip()
-    language_code = parts[3].strip()
-
-    tts = gTTS(text=text_to_dub, lang=language_code)
-    audio_path = os.path.join(config.VOICE_DIR, f"{character_name}_tts.mp3")
-    tts.save(audio_path)
-    
-    voice_map[character_name] = audio_path
-    
-    with open(config.VOICE_MAP_FILE, "w") as f:
-        json.dump(voice_map, f)
-    
-    message.reply_text(f"Text for {character_name} has been converted to audio and added.")
-
-app.run()
+if __name__ == "__main__":
+    app.run()
