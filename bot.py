@@ -1,7 +1,7 @@
 import os
 from flask import Flask, request, redirect, url_for, send_from_directory
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 import asyncio
 import subprocess
 from werkzeug.utils import secure_filename
@@ -78,6 +78,17 @@ async def upload_file():
 async def download_file(filename):
     return send_from_directory(app_flask.config['PROCESSED_FOLDER'], filename)
 
+@app_pyrogram.on_message(filters.command(["start"]))
+async def start(client: Client, message: Message):
+    await message.reply(
+        "Welcome to the Anime Voice Dub Bot! Send me a video to start.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("Select Language", callback_data="select_language")]
+            ]
+        )
+    )
+
 @app_pyrogram.on_message(filters.video)
 async def anime_voice_dub(client: Client, message: Message):
     video = message.video
@@ -88,34 +99,40 @@ async def anime_voice_dub(client: Client, message: Message):
     await message.download(file_name=input_video_path)
     
     # Inform user to upload the voice file
-    await message.reply("Please send the character voice file (audio) as the next message.")
-    # Save the message ID for reference
-    original_message_id = message.message_id
+    await message.reply("Please select the dubbing language.", reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("Tamil", callback_data=f"dub_language_{video.file_id}_tamil")],
+        [InlineKeyboardButton("Other Language", callback_data=f"dub_language_{video.file_id}_other")],
+    ]))
 
-    @app_pyrogram.on_message(filters.audio & filters.reply)
-    async def receive_voice_file(client: Client, voice_message: Message):
-        # Ensure the reply is to the correct message
-        if voice_message.reply_to_message and voice_message.reply_to_message.message_id == original_message_id:
-            voice = voice_message.audio
-            voice_path = f"{config.UPLOAD_FOLDER}/{voice.file_id}.mp3"
-            
-            # Download the voice file
-            await voice_message.download(file_name=voice_path)
-            
-            # Process the video (dub voice and add watermark)
-            await process_video(input_video_path, output_video_path, voice_path, config.WATERMARK_IMAGE_PATH)
-            
-            # Send the processed video back to the user
-            await voice_message.reply_video(video=output_video_path, caption="Here is your dubbed video with watermark!")
-            
-            # Clean up the files
-            os.remove(input_video_path)
-            os.remove(output_video_path)
-            os.remove(voice_path)
-
-@app_pyrogram.on_message(filters.command(["start"]))
-async def start(client: Client, message: Message):
-    await message.reply("Welcome to the Anime Voice Dub Bot! Send me a video and then send a voice file for dubbing, and I will dub it with the character's voice and add a watermark.")
+@app_pyrogram.on_callback_query()
+async def handle_callback_query(client: Client, callback_query):
+    data = callback_query.data
+    if data.startswith("dub_language_"):
+        _, file_id, language = data.split("_")
+        input_video_path = f"{config.UPLOAD_FOLDER}/{file_id}.mp4"
+        await callback_query.message.reply(f"Selected language: {language}. Now please send the character voice file as the next message.")
+        
+        @app_pyrogram.on_message(filters.audio & filters.reply)
+        async def receive_voice_file(client: Client, voice_message: Message):
+            if voice_message.reply_to_message and voice_message.reply_to_message.message_id == callback_query.message.message_id:
+                voice = voice_message.audio
+                voice_path = f"{config.UPLOAD_FOLDER}/{voice.file_id}.mp3"
+                
+                # Download the voice file
+                await voice_message.download(file_name=voice_path)
+                
+                output_video_path = f"{config.PROCESSED_FOLDER}/{file_id}_dubbed_{language}.mp4"
+                
+                # Process the video (dub voice and add watermark)
+                await process_video(input_video_path, output_video_path, voice_path, config.WATERMARK_IMAGE_PATH)
+                
+                # Send the processed video back to the user
+                await voice_message.reply_video(video=output_video_path, caption="Here is your dubbed video with watermark!")
+                
+                # Clean up the files
+                os.remove(input_video_path)
+                os.remove(output_video_path)
+                os.remove(voice_path)
 
 async def save_file(file, path):
     async with aiofiles.open(path, 'wb') as f:
