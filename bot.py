@@ -10,6 +10,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
 import time
+from datetime import datetime
+import ntplib
 
 # Import configuration
 from config import Config
@@ -203,10 +205,32 @@ def upload_file():
         # Clean up files
         if os.path.exists(video_filename):
             os.remove(video_filename)
-        if os.exists(tts_audio_file):
+        if os.path.exists(tts_audio_file):
             os.remove(tts_audio_file)
-        if os.exists(output_video_file):
+        if os.path.exists(output_video_file):
             os.remove(output_video_file)
 
+# Function to synchronize time
+def synchronize_time():
+    try:
+        client = ntplib.NTPClient()
+        response = client.request('pool.ntp.org')
+        os.system(f"sudo date {time.strftime('%m%d%H%M%Y.%S', time.localtime(response.tx_time))}")
+    except Exception as e:
+        print(f"Failed to synchronize time: {e}")
+
+# Function to run Flask app
+def run_flask():
+    flask_app.run(debug=True, host="0.0.0.0", port=5000)
+
+# Function to run Pyrogram bot
+async def run_bot():
+    await app.start()
+    await app.idle()
+
+# Main entry point
 if __name__ == "__main__":
-    app.run()
+    synchronize_time()
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
+    asyncio.run(run_bot())
