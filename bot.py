@@ -8,6 +8,7 @@ import subprocess
 import uuid
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from threading import Thread
 
 # Import configuration
 from config import Config
@@ -206,12 +207,11 @@ def upload_file():
         if os.path.exists(output_video_file):
             os.remove(output_video_file)
 
+# Run both Flask and Pyrogram
 if __name__ == "__main__":
-    # Run the Pyrogram bot
-    app.start()
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
 
-    # Run the Flask app
-    flask_app.run(debug=True, host="0.0.0.0", port=5000)
+    asyncio.run(app.start())
 
-    # Stop the Pyrogram bot
-    app.stop()
+    flask_thread.join()
