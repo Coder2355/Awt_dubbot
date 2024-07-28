@@ -6,6 +6,10 @@ import asyncio
 import subprocess
 from werkzeug.utils import secure_filename
 import aiofiles
+from pydub import AudioSegment
+import speech_recognition as sr
+from googletrans import Translator
+from gtts import gTTS
 import config
 import threading
 
@@ -25,12 +29,12 @@ if not os.path.exists(config.PROCESSED_FOLDER):
 def allowed_file(filename, allowed_extensions):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
 
-async def process_video(input_video_path, output_video_path, voice_path, watermark_path):
+async def process_video(input_video_path, output_video_path, voice_path):
     command = [
         'ffmpeg',
         '-i', input_video_path,
         '-i', voice_path,
-        '-filter_complex', f"[0:v][1:a]concat=n=1:v=1:a=1[v][a];[v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.5:t=fill,drawtext=text='Sample Watermark':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=24:fontcolor=white[v]",
+        '-filter_complex', "[0:v][1:a]concat=n=1:v=1:a=1[v][a];[v]drawtext=text='@Anime_warrior_tamil':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=24:fontcolor=white[v]",
         '-map', '[v]',
         '-map', '[a]',
         '-c:v', 'libx264',
@@ -44,32 +48,28 @@ async def process_video(input_video_path, output_video_path, voice_path, waterma
 @app_flask.route('/', methods=['GET', 'POST'])
 async def upload_file():
     if request.method == 'POST':
-        if 'file' not in request.files or 'voice' not in request.files:
+        if 'file' not in request.files:
             return redirect(request.url)
         file = request.files['file']
-        voice = request.files['voice']
-        if file.filename == '' or voice.filename == '':
+        if file.filename == '':
             return redirect(request.url)
-        if file and allowed_file(file.filename, config.ALLOWED_EXTENSIONS) and voice and allowed_file(voice.filename, config.ALLOWED_AUDIO_EXTENSIONS):
+        if file and allowed_file(file.filename, config.ALLOWED_EXTENSIONS):
             filename = secure_filename(file.filename)
-            voice_filename = secure_filename(voice.filename)
             input_video_path = os.path.join(app_flask.config['UPLOAD_FOLDER'], filename)
-            voice_path = os.path.join(app_flask.config['UPLOAD_FOLDER'], voice_filename)
             output_video_path = os.path.join(app_flask.config['PROCESSED_FOLDER'], f"processed_{filename}")
             await save_file(file, input_video_path)
-            await save_file(voice, voice_path)
             
-            # Process the video
-            await process_video(input_video_path, output_video_path, voice_path, config.WATERMARK_IMAGE_PATH)
+            # Extract audio and process for voice detection and translation
+            voice_path = await extract_audio(input_video_path)
+            await process_video(input_video_path, output_video_path, voice_path)
             
             return redirect(url_for('download_file', filename=f"processed_{filename}"))
     return '''
     <!doctype html>
     <title>Upload Video</title>
-    <h1>Upload a video and character voice for dubbing and watermarking</h1>
+    <h1>Upload a video for dubbing and watermarking</h1>
     <form method=post enctype=multipart/form-data>
       <input type=file name=file>
-      <input type=file name=voice>
       <input type=submit value=Upload>
     </form>
     '''
@@ -98,7 +98,7 @@ async def anime_voice_dub(client: Client, message: Message):
     # Download the video
     await message.download(file_name=input_video_path)
     
-    # Inform user to upload the voice file
+    # Inform user to select the dubbing language
     await message.reply("Please select the dubbing language.", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("Tamil", callback_data=f"dub_language_{video.file_id}_tamil")],
         [InlineKeyboardButton("Other Language", callback_data=f"dub_language_{video.file_id}_other")],
@@ -110,33 +110,59 @@ async def handle_callback_query(client: Client, callback_query):
     if data.startswith("dub_language_"):
         _, file_id, language = data.split("_")
         input_video_path = f"{config.UPLOAD_FOLDER}/{file_id}.mp4"
-        await callback_query.message.reply(f"Selected language: {language}. Now please send the character voice file as the next message.")
+        voice_path = await extract_audio(input_video_path)
         
-        @app_pyrogram.on_message(filters.audio & filters.reply)
-        async def receive_voice_file(client: Client, voice_message: Message):
-            if voice_message.reply_to_message and voice_message.reply_to_message.message_id == callback_query.message.message_id:
-                voice = voice_message.audio
-                voice_path = f"{config.UPLOAD_FOLDER}/{voice.file_id}.mp3"
-                
-                # Download the voice file
-                await voice_message.download(file_name=voice_path)
-                
-                output_video_path = f"{config.PROCESSED_FOLDER}/{file_id}_dubbed_{language}.mp4"
-                
-                # Process the video (dub voice and add watermark)
-                await process_video(input_video_path, output_video_path, voice_path, config.WATERMARK_IMAGE_PATH)
-                
-                # Send the processed video back to the user
-                await voice_message.reply_video(video=output_video_path, caption="Here is your dubbed video with watermark!")
-                
-                # Clean up the files
-                os.remove(input_video_path)
-                os.remove(output_video_path)
-                os.remove(voice_path)
+        translated_voice_path = await translate_voice(voice_path, language)
+        output_video_path = f"{config.PROCESSED_FOLDER}/{file_id}_dubbed_{language}.mp4"
+        
+        # Process the video (dub voice and add watermark)
+        await process_video(input_video_path, output_video_path, translated_voice_path)
+        
+        # Send the processed video back to the user
+        await callback_query.message.reply_video(video=output_video_path, caption="Here is your dubbed video with watermark!")
+        
+        # Clean up the files
+        os.remove(input_video_path)
+        os.remove(output_video_path)
+        os.remove(voice_path)
+        os.remove(translated_voice_path)
 
 async def save_file(file, path):
     async with aiofiles.open(path, 'wb') as f:
         await f.write(await file.read())
+
+async def extract_audio(video_path):
+    audio_path = video_path.rsplit('.', 1)[0] + ".wav"
+    command = [
+        'ffmpeg',
+        '-i', video_path,
+        '-q:a', '0',
+        '-map', 'a',
+        audio_path
+    ]
+    process = await asyncio.create_subprocess_exec(*command)
+    await process.communicate()
+    return audio_path
+
+async def translate_voice(voice_path, target_language):
+    recognizer = sr.Recognizer()
+    translator = Translator()
+    
+    audio = AudioSegment.from_wav(voice_path)
+    audio.export("temp.wav", format="wav")
+    
+    with sr.AudioFile("temp.wav") as source:
+        audio_data = recognizer.record(source)
+        text = recognizer.recognize_google(audio_data)
+    
+    translated_text = translator.translate(text, dest=target_language).text
+    
+    tts = gTTS(translated_text, lang=target_language)
+    translated_voice_path = voice_path.rsplit('.', 1)[0] + f"_{target_language}.mp3"
+    tts.save(translated_voice_path)
+    
+    os.remove("temp.wav")
+    return translated_voice_path
 
 if __name__ == "__main__":
     app_pyrogram.run()
