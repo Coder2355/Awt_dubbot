@@ -22,6 +22,9 @@ if os.path.exists(config.VOICE_MAP_FILE):
 else:
     voice_map = {}
 
+# Dictionary to keep track of users adding voices
+adding_voice_for = {}
+
 # Function to merge video and audio using FFmpeg
 def merge_video_audio(video_path, audio_path, output_path):
     command = [
@@ -51,12 +54,16 @@ def add_voice(client, message):
     character_name = parts[1].strip()
     message.reply_text(f"Send me the voice audio for {character_name}.")
     
-    # Store the character name in the user session for the next message
-    app.set_parse_mode("adding_voice", message.chat.id, character_name)
+    # Store the character name in the adding_voice_for dictionary
+    adding_voice_for[message.chat.id] = character_name
 
-@app.on_message(filters.audio & filters.parse_mode("adding_voice"))
+@app.on_message(filters.audio)
 def receive_voice(client, message):
-    character_name = app.get_parse_mode(message.chat.id)
+    user_id = message.chat.id
+    if user_id not in adding_voice_for:
+        return
+
+    character_name = adding_voice_for.pop(user_id)
     audio_path = os.path.join(config.VOICE_DIR, f"{character_name}.mp3")
     message.download(audio_path)
     
@@ -66,7 +73,6 @@ def receive_voice(client, message):
         json.dump(voice_map, f)
     
     message.reply_text(f"Voice for {character_name} has been added.")
-    app.clear_parse_mode(message.chat.id)
 
 @app.on_message(filters.video | filters.text)
 def handle_video(client, message):
@@ -113,7 +119,5 @@ def dub_text(client, message):
         json.dump(voice_map, f)
     
     message.reply_text(f"Text for {character_name} has been converted to audio and added.")
-    
-    app.clear_parse_mode(message.chat.id)
 
 app.run()
