@@ -94,4 +94,4 @@ async def start(client: Client, message: Message):
     await message.reply("Welcome to the Anime Voice Dub Bot! Send me a video and I will dub it with a character voice and add a watermark.")
 
 if __name__ == "__main__":
-    app.run()
+    app_pyrogram.run()
