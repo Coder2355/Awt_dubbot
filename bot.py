@@ -1,109 +1,97 @@
 import os
-import shutil
-import time
-from threading import Thread
-from flask import Flask, jsonify
-import speech_recognition as sr
-from pydub import AudioSegment
+from flask import Flask, request, redirect, url_for, send_from_directory, render_template
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from transformers import pipeline
-import torchaudio
-import config
+from pyrogram.types import Message
+import subprocess
+import threading
+from werkzeug.utils import secure_filename
+import config  # Import configuration
 
-# Initialize the Pyrogram Client
-app = Client("anime_tamil_dub_bot", bot_token=config.BOT_TOKEN, api_id=config.API_ID, api_hash=config.API_HASH)
+# Create a Pyrogram Client
+app_pyrogram = Client("anime_voice_dub_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
 
-# Initialize Flask app
-flask_app = Flask(__name__)
+# Create Flask App
+app_flask = Flask(__name__)
+app_flask.config['UPLOAD_FOLDER'] = config.UPLOAD_FOLDER
+app_flask.config['PROCESSED_FOLDER'] = config.PROCESSED_FOLDER
 
-# Initialize the speech recognition and translation pipelines
-recognizer = sr.Recognizer()
-translation_pipeline = pipeline("translation", model="Helsinki-NLP/opus-mt-en-tam")
-voice_clone_model = ...  # Initialize your voice cloning model
+if not os.path.exists(config.UPLOAD_FOLDER):
+    os.makedirs(config.UPLOAD_FOLDER)
+if not os.path.exists(config.PROCESSED_FOLDER):
+    os.makedirs(config.PROCESSED_FOLDER)
 
-# Function to dub the anime video with Tamil audio
-def dub_anime_video(video_path, audio_path, output_path):
-    command = f"ffmpeg -i {video_path} -i {audio_path} -c copy -map 0:v:0 -map 1:a:0 {output_path}"
-    os.system(command)
-    return output_path
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in config.ALLOWED_EXTENSIONS
 
-# Function to recognize speech from audio
-def recognize_speech(audio_path):
-    audio = sr.AudioFile(audio_path)
-    with audio as source:
-        audio_data = recognizer.record(source)
-    return recognizer.recognize_google(audio_data)
+def process_video(input_video_path, output_video_path, voice_path, watermark_path):
+    command = [
+        'ffmpeg',
+        '-i', input_video_path,
+        '-i', voice_path,
+        '-filter_complex', f"[0:v][1:a]concat=n=1:v=1:a=1[v][a];[v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.5:t=fill,drawtext=text='Sample Watermark':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=24:fontcolor=white[v]",
+        '-map', '[v]',
+        '-map', '[a]',
+        '-c:v', 'libx264',
+        '-c:a', 'aac',
+        '-strict', 'experimental',
+        output_video_path
+    ]
+    subprocess.run(command, check=True)
 
-# Function to translate text to Tamil
-def translate_to_tamil(text):
-    return translation_pipeline(text)[0]['translation_text']
+@app_flask.route('/', methods=['GET', 'POST'])
+def upload_file():
+    if request.method == 'POST':
+        if 'file' not in request.files:
+            return redirect(request.url)
+        file = request.files['file']
+        if file.filename == '':
+            return redirect(request.url)
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            input_video_path = os.path.join(app_flask.config['UPLOAD_FOLDER'], filename)
+            output_video_path = os.path.join(app_flask.config['PROCESSED_FOLDER'], f"processed_{filename}")
+            file.save(input_video_path)
+            
+            # Process the video
+            process_video(input_video_path, output_video_path, config.CHARACTER_VOICE_PATH, config.WATERMARK_IMAGE_PATH)
+            
+            return redirect(url_for('download_file', filename=f"processed_{filename}"))
+    return '''
+    <!doctype html>
+    <title>Upload Video</title>
+    <h1>Upload a video for dubbing and watermarking</h1>
+    <form method=post enctype=multipart/form-data>
+      <input type=file name=file>
+      <input type=submit value=Upload>
+    </form>
+    '''
 
-# Function to clone voice and generate speech
-def clone_and_generate_speech(text, character_voice_path):
-    # Implement the voice cloning and speech generation logic here
-    pass
+@app_flask.route('/uploads/<filename>')
+def download_file(filename):
+    return send_from_directory(app_flask.config['PROCESSED_FOLDER'], filename)
 
-@app.on_message(filters.command("start"))
-async def start(client, message):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Help", callback_data="help")],
-        [InlineKeyboardButton("Source Code", url="https://github.com/your-repo")]
-    ])
-    await message.reply("Hello! Send me an anime video file and a Tamil audio file with the command /dub.", reply_markup=keyboard)
+@app_pyrogram.on_message(filters.video)
+async def anime_voice_dub(client: Client, message: Message):
+    video = message.video
+    input_video_path = f"{config.UPLOAD_FOLDER}/{video.file_id}.mp4"
+    output_video_path = f"{config.PROCESSED_FOLDER}/{video.file_id}_dubbed.mp4"
 
-@app.on_callback_query()
-async def callback_query(client, callback_query):
-    if callback_query.data == "help":
-        await callback_query.message.edit("Use /dub command to dub an anime video with Tamil audio.")
+    # Download the video
+    await message.download(file_name=input_video_path)
 
-@app.on_message(filters.command("dub") & filters.reply)
-async def dub(client, message):
-    reply = message.reply_to_message
-    start_time = time.time()
-    
-    if reply.video and reply.audio:
-        video_file_id = reply.video.file_id
-        audio_file_id = reply.audio.file_id
+    # Process the video (dub voice and add watermark)
+    process_video(input_video_path, output_video_path, config.CHARACTER_VOICE_PATH, config.WATERMARK_IMAGE_PATH)
 
-        # Download video and audio files
-        video_path = await client.download_media(video_file_id)
-        audio_path = await client.download_media(audio_file_id)
+    # Send the processed video back to the user
+    await message.reply_video(video=output_video_path, caption="Here is your dubbed video with watermark!")
 
-        # Split the audio into segments for each character
-        segments = split_audio_segments(audio_path)  # Implement this function
+    # Clean up the files
+    os.remove(input_video_path)
+    os.remove(output_video_path)
 
-        dubbed_segments = []
-        for segment in segments:
-            character_voice_path = identify_character_voice(segment)  # Implement this function
-            speech_text = recognize_speech(segment)
-            tamil_text = translate_to_tamil(speech_text)
-            tamil_audio_segment = clone_and_generate_speech(tamil_text, character_voice_path)
-            dubbed_segments.append(tamil_audio_segment)
-
-        # Concatenate all the dubbed segments into one audio file
-        dubbed_audio_path = concatenate_audio_segments(dubbed_segments)  # Implement this function
-
-        # Merge the dubbed audio with the video
-        output_path = "dubbed_anime_video.mp4"
-        dub_anime_video(video_path, dubbed_audio_path, output_path)
-
-        end_time = time.time()
-        processing_time = end_time - start_time
-
-        await message.reply_video(output_path, caption=f"Here is your dubbed anime video.\nProcessing time: {processing_time:.2f} seconds.")
-
-        # Clean up the files
-        os.remove(video_path)
-        os.remove(audio_path)
-        os.remove(output_path)
-    else:
-        await message.reply("Please reply to a video file and an audio file with the command /dub.")
-
-# Flask route for web support
-@flask_app.route('/status', methods=['GET'])
-def status():
-    return jsonify(status="Bot is running", uptime=f"{time.time() - start_time:.2f} seconds")
+@app_pyrogram.on_message(filters.command(["start"]))
+async def start(client: Client, message: Message):
+    await message.reply("Welcome to the Anime Voice Dub Bot! Send me a video and I will dub it with a character voice and add a watermark.")
 
 if __name__ == "__main__":
     app.run()
