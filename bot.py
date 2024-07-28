@@ -207,6 +207,10 @@ def upload_file():
         if os.path.exists(output_video_file):
             os.remove(output_video_file)
 
+# Function to run Flask app
+def run_flask():
+    flask_app.run(debug=True, host="0.0.0.0", port=5000)
+
 # Run both Flask and Pyrogram
 if __name__ == "__main__":
     flask_thread = Thread(target=run_flask)
