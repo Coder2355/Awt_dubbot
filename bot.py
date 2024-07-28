@@ -8,7 +8,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
 from datetime import datetime
-import ntplib
 
 # Import configuration
 from config import Config
