@@ -6,6 +6,6 @@ aiofiles==23.1.0
 flask==2.3.2
 werkzeug
 pydub
-SpeechRecognition==3.8.1
-googletrans==4.0.0-rc1
-gtts==2.2.4
+SpeechRecognition
+googletrans
+gtts
