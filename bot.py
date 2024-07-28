@@ -7,7 +7,6 @@ from gtts import gTTS
 import subprocess
 import uuid
 import asyncio
-from config import Config
 from concurrent.futures import ThreadPoolExecutor
 
 # Import configuration
