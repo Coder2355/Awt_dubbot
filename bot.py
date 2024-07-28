@@ -1,214 +1,119 @@
 import os
-import json
-from flask import Flask, request, jsonify, send_file
-from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from gtts import gTTS
 import subprocess
-import uuid
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from threading import Thread
-import time
+import json
 from datetime import datetime
+from pyrogram import Client, filters
+import requests
+from gtts import gTTS
+import config
 
-# Import configuration
-from config import Config
+app = Client("anime_dub_bot", api_id=config.API_ID, api_hash=config.API_HASH, bot_token=config.BOT_TOKEN)
 
-# Initialize Flask app
-flask_app = Flask(__name__)
+# Create directories if they don't exist
+if not os.path.exists(config.VOICE_DIR):
+    os.makedirs(config.VOICE_DIR)
+if not os.path.exists(config.DOWNLOAD_DIR):
+    os.makedirs(config.DOWNLOAD_DIR)
 
-# Initialize the bot with your API ID and hash
-app = Client("anime_dub_bot", api_id=Config.API_ID, api_hash=Config.API_HASH, bot_token=Config.BOT_TOKEN)
+# Load existing voice map or create a new one
+if os.path.exists(config.VOICE_MAP_FILE):
+    with open(config.VOICE_MAP_FILE, "r") as f:
+        voice_map = json.load(f)
+else:
+    voice_map = {}
 
-# Directory to store files temporarily
-UPLOAD_DIR = Config.UPLOAD_DIR
-DOWNLOAD_DIR = Config.DOWNLOAD_DIR
-USER_DATA_FILE = Config.USER_DATA_FILE
+# Function to merge video and audio using FFmpeg
+def merge_video_audio(video_path, audio_path, output_path):
+    command = [
+        'ffmpeg', '-i', video_path, '-i', audio_path, '-c:v', 'copy', '-c:a', 'aac', output_path
+    ]
+    subprocess.run(command)
 
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
-if not os.path.exists(DOWNLOAD_DIR):
-    os.makedirs(DOWNLOAD_DIR)
+# Function to download video from a URL
+def download_video_from_url(url):
+    response = requests.get(url)
+    video_path = os.path.join(config.DOWNLOAD_DIR, os.path.basename(url))
+    with open(video_path, 'wb') as f:
+        f.write(response.content)
+    return video_path
 
-# Load user data from file
-def load_user_data():
-    if os.path.exists(USER_DATA_FILE):
-        with open(USER_DATA_FILE, 'r') as f:
-            return json.load(f)
-    return {}
+@app.on_message(filters.command(["start"]))
+def start(client, message):
+    message.reply_text("Welcome to the Anime Dub Bot! Send me a video or a video URL to dub in Tamil or another language with character voices. To add voice for a character, use /addvoice character_name. To dub using text, use /dubtext character_name text_to_dub language_code.")
 
-# Save user data to file
-def save_user_data(data):
-    with open(USER_DATA_FILE, 'w') as f:
-        json.dump(data, f)
+@app.on_message(filters.command(["addvoice"]))
+def add_voice(client, message):
+    parts = message.text.split(" ", 1)
+    if len(parts) != 2:
+        message.reply_text("Usage: /addvoice character_name")
+        return
+    
+    character_name = parts[1].strip()
+    message.reply_text(f"Send me the voice audio for {character_name}.")
+    
+    # Store the character name in the user session for the next message
+    app.set_parse_mode("adding_voice", message.chat.id, character_name)
 
-user_data = load_user_data()
+@app.on_message(filters.audio & filters.parse_mode("adding_voice"))
+def receive_voice(client, message):
+    character_name = app.get_parse_mode(message.chat.id)
+    audio_path = os.path.join(config.VOICE_DIR, f"{character_name}.mp3")
+    message.download(audio_path)
+    
+    voice_map[character_name] = audio_path
+    
+    with open(config.VOICE_MAP_FILE, "w") as f:
+        json.dump(voice_map, f)
+    
+    message.reply_text(f"Voice for {character_name} has been added.")
+    app.clear_parse_mode(message.chat.id)
 
-# Function to extract audio from video
-def extract_audio(video_path, audio_path):
-    command = f"ffmpeg -i {video_path} -q:a 0 -map a {audio_path}"
-    subprocess.run(command, shell=True, check=True)
+@app.on_message(filters.video | filters.text)
+def handle_video(client, message):
+    if message.video:
+        video_path = message.download()
+    elif message.text and message.text.startswith("http"):
+        video_url = message.text.strip()
+        video_path = download_video_from_url(video_url)
+    else:
+        message.reply_text("Send me a video file or a URL to a video.")
+        return
+    
+    # Determine the character's audio (this is a placeholder, logic to determine the character should be added)
+    character = "character1"  # Example character
+    audio_path = voice_map.get(character, None)
+    
+    if not audio_path:
+        message.reply_text(f"No voice found for {character}. Please add a voice using /addvoice character_name.")
+        return
+    
+    output_path = "dubbed_video.mp4"
+    merge_video_audio(video_path, audio_path, output_path)
+    
+    client.send_video(message.chat.id, video=output_path, caption="Here is your dubbed video!")
 
-# Function to generate TTS audio
-def generate_tts_audio(text, audio_path, lang='en'):
-    tts = gTTS(text, lang=lang)
+@app.on_message(filters.command(["dubtext"]))
+def dub_text(client, message):
+    parts = message.text.split(" ", 3)
+    if len(parts) != 4:
+        message.reply_text("Usage: /dubtext character_name text_to_dub language_code")
+        return
+
+    character_name = parts[1].strip()
+    text_to_dub = parts[2].strip()
+    language_code = parts[3].strip()
+
+    tts = gTTS(text=text_to_dub, lang=language_code)
+    audio_path = os.path.join(config.VOICE_DIR, f"{character_name}_tts.mp3")
     tts.save(audio_path)
-
-# Function to combine audio with video
-def combine_audio_video(video_path, audio_path, output_path):
-    command = f"ffmpeg -i {video_path} -i {audio_path} -c:v copy -map 0:v:0 -map 1:a:0 {output_path}"
-    subprocess.run(command, shell=True, check=True)
-
-# Function to handle errors
-async def handle_error(client, message: Message, error: str):
-    await message.reply_text(f"An error occurred: {error}")
-
-@app.on_message(filters.command("start"))
-async def start(client, message: Message):
-    await message.reply_text("Hello! Send me a video and text to dub it with an anime voice. Use /tamil for Tamil dubbing. Use /voices to see available voices.")
-
-@app.on_message(filters.command("voices"))
-async def show_voices(client, message: Message):
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("English", callback_data="voice_en")],
-        [InlineKeyboardButton("Tamil", callback_data="voice_ta")]
-    ])
-    await message.reply_text("Choose a voice:", reply_markup=keyboard)
-
-@app.on_callback_query(filters.regex(r"^voice_"))
-async def handle_voice_selection(client, callback_query):
-    voice = callback_query.data.split("_")[1]
-    user_id = str(callback_query.from_user.id)
-    user_data[user_id] = user_data.get(user_id, {})
-    user_data[user_id]["voice"] = voice
-    save_user_data(user_data)
-    await callback_query.message.edit_text(f"Voice set to {voice}. Now send me the video.")
-
-@app.on_message(filters.video)
-async def handle_video(client, message: Message):
-    try:
-        # Download the video
-        video_file = await message.download(DOWNLOAD_DIR)
-        
-        # Save video file path to user's session
-        user_id = str(message.from_user.id)
-        user_data[user_id] = user_data.get(user_id, {})
-        user_data[user_id]["video_file"] = video_file
-        save_user_data(user_data)
-        
-        await message.reply_text("Video received! Now send me the text to dub.")
-    except Exception as e:
-        await handle_error(client, message, str(e))
-
-@app.on_message(filters.text & filters.private & ~filters.command(["tamil", "voices"]))
-async def handle_text(client, message: Message):
-    user_id = str(message.from_user.id)
-    user_session = user_data.get(user_id, {})
-    video_file = user_session.get("video_file")
-    voice = user_session.get("voice", "en")
     
-    if not video_file:
-        await message.reply_text("Please send a video first.")
-        return
-
-    try:
-        tts_audio_file = os.path.join(DOWNLOAD_DIR, f"tts_audio_{voice}.mp3")
-        output_video_file = os.path.join(DOWNLOAD_DIR, f"dubbed_video_{voice}.mp4")
-        
-        # Generate TTS audio and combine it with the video concurrently
-        with ThreadPoolExecutor() as executor:
-            loop = asyncio.get_event_loop()
-            tasks = [
-                loop.run_in_executor(executor, generate_tts_audio, message.text, tts_audio_file, voice),
-                loop.run_in_executor(executor, combine_audio_video, video_file, tts_audio_file, output_video_file)
-            ]
-            await asyncio.wait(tasks)
-        
-        # Send the dubbed video back to the user
-        await message.reply_video(output_video_file)
-
-        # Clean up files
-        os.remove(video_file)
-        os.remove(tts_audio_file)
-        os.remove(output_video_file)
-    except Exception as e:
-        await handle_error(client, message, str(e))
-
-@app.on_message(filters.command("tamil"))
-async def handle_tamil_command(client, message: Message):
-    user_id = str(message.from_user.id)
-    user_session = user_data.get(user_id, {})
-    video_file = user_session.get("video_file")
+    voice_map[character_name] = audio_path
     
-    if not video_file:
-        await message.reply_text("Please send a video first.")
-        return
+    with open(config.VOICE_MAP_FILE, "w") as f:
+        json.dump(voice_map, f)
+    
+    message.reply_text(f"Text for {character_name} has been converted to audio and added.")
+    
+    app.clear_parse_mode(message.chat.id)
 
-    try:
-        tts_audio_file = os.path.join(DOWNLOAD_DIR, "tts_audio_tamil.mp3")
-        output_video_file = os.path.join(DOWNLOAD_DIR, "dubbed_video_tamil.mp4")
-        
-        # Generate TTS audio and combine it with the video concurrently
-        with ThreadPoolExecutor() as executor:
-            loop = asyncio.get_event_loop()
-            tasks = [
-                loop.run_in_executor(executor, generate_tts_audio, message.text, tts_audio_file, 'ta'),
-                loop.run_in_executor(executor, combine_audio_video, video_file, tts_audio_file, output_video_file)
-            ]
-            await asyncio.wait(tasks)
-        
-        # Send the dubbed video back to the user
-        await message.reply_video(output_video_file)
-
-        # Clean up files
-        os.remove(video_file)
-        os.remove(tts_audio_file)
-        os.remove(output_video_file)
-    except Exception as e:
-        await handle_error(client, message, str(e))
-
-# Flask route for web support
-@flask_app.route('/upload', methods=['POST'])
-def upload_file():
-    if 'video' not in request.files or 'text' not in request.form:
-        return jsonify({"error": "No video file or text provided"}), 400
-
-    video_file = request.files['video']
-    text = request.form['text']
-    voice = request.form.get('voice', 'en')
-
-    video_filename = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}.mp4")
-    tts_audio_file = os.path.join(UPLOAD_DIR, f"tts_audio_{uuid.uuid4()}.mp3")
-    output_video_file = os.path.join(UPLOAD_DIR, f"dubbed_video_{uuid.uuid4()}.mp4")
-
-    video_file.save(video_filename)
-
-    try:
-        # Generate TTS audio and combine it with the video concurrently
-        with ThreadPoolExecutor() as executor:
-            loop = asyncio.get_event_loop()
-            tasks = [
-                loop.run_in_executor(executor, generate_tts_audio, text, tts_audio_file, voice),
-                loop.run_in_executor(executor, combine_audio_video, video_filename, tts_audio_file, output_video_file)
-            ]
-            loop.run_until_complete(asyncio.wait(tasks))
-        
-        # Return the dubbed video
-        return send_file(output_video_file, as_attachment=True)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    finally:
-        # Clean up files
-        if os.path.exists(video_filename):
-            os.remove(video_filename)
-        if os.path.exists(tts_audio_file):
-            os.remove(tts_audio_file)
-        if os.path.exists(output_video_file):
-            os.remove(output_video_file)
-
-
-if __name__ == "__main__":
-    app.run()
+app.run()
