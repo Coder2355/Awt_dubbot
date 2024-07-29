@@ -3,16 +3,17 @@ import asyncio
 import subprocess
 from flask import Flask, request, send_from_directory
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from config import API_ID, API_HASH, BOT_TOKEN, FFMPEG_PATH, UPLOAD_FOLDER, DUBBED_FOLDER, PORT, GOOGLE_CLOUD_SPEECH_CREDENTIALS
-from googletrans import Translator
-from google.cloud import speech_v1p1beta1 as speech
-from gtts import gTTS
 from threading import Thread
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from config import API_ID, API_HASH, BOT_TOKEN, FFMPEG_PATH, UPLOAD_FOLDER, DUBBED_FOLDER, PORT
+from googletrans import Translator
+from gtts import gTTS
+import whisper
 
 # Initialize the bot with your credentials
 app = Client("dub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 translator = Translator()
+model = whisper.load_model("base")
 
 # Initialize Flask app
 web_app = Flask(__name__)
@@ -22,19 +23,9 @@ os.makedirs(DUBBED_FOLDER, exist_ok=True)
 user_language = {}
 
 def transcribe_audio(audio_file_path):
-    client = speech.SpeechClient.from_service_account_json(GOOGLE_CLOUD_SPEECH_CREDENTIALS)
-    with open(audio_file_path, 'rb') as audio_file:
-        content = audio_file.read()
-    
-    audio = speech.RecognitionAudio(content=content)
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-        sample_rate_hertz=16000,
-        language_code="en-US",
-    )
-    
-    response = client.recognize(config=config, audio=audio)
-    return ' '.join([result.alternatives[0].transcript for result in response.results])
+    # Load the Whisper model and transcribe the audio
+    result = model.transcribe(audio_file_path)
+    return result['text']
 
 async def dub_voice(input_path, output_path, lang_code, is_video=False):
     # Convert input media to WAV format for processing
