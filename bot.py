@@ -3,12 +3,12 @@ import asyncio
 import subprocess
 from flask import Flask, request, send_from_directory
 from pyrogram import Client, filters
-from threading import Thread
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, BOT_TOKEN, FFMPEG_PATH, UPLOAD_FOLDER, DUBBED_FOLDER, PORT, GOOGLE_CLOUD_SPEECH_CREDENTIALS
 from googletrans import Translator
 from google.cloud import speech_v1p1beta1 as speech
 from gtts import gTTS
+from threading import Thread
 
 # Initialize the bot with your credentials
 app = Client("dub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -36,10 +36,10 @@ def transcribe_audio(audio_file_path):
     response = client.recognize(config=config, audio=audio)
     return ' '.join([result.alternatives[0].transcript for result in response.results])
 
-async def dub_voice(input_path, output_path, lang_code):
-    # Convert input audio to WAV format for processing
-    wav_path = input_path.replace('.mp3', '.wav')
-    command = [FFMPEG_PATH, '-i', input_path, wav_path]
+async def dub_voice(input_path, output_path, lang_code, is_video=False):
+    # Convert input media to WAV format for processing
+    wav_path = input_path.replace('.mp3', '.wav').replace('.mp4', '.wav')
+    command = [FFMPEG_PATH, '-i', input_path, '-q:a', '0', '-map', 'a', wav_path]
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     await process.communicate()
 
@@ -50,15 +50,22 @@ async def dub_voice(input_path, output_path, lang_code):
     translated_text = translator.translate(english_text, src='en', dest=lang_code).text
 
     # Step 3: Convert the translated text to speech
-    tts_path = output_path.replace('.mp3', '_tts.mp3')
+    tts_path = output_path.replace('.mp3', '_tts.mp3').replace('.mp4', '_tts.mp3')
     tts = gTTS(translated_text, lang=lang_code)
     tts.save(tts_path)
 
-    # Step 4: Combine original audio with TTS audio
-    command = [
-        FFMPEG_PATH, '-i', input_path, '-i', tts_path, '-filter_complex',
-        '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-ac', '2', output_path
-    ]
+    if is_video:
+        # Step 4: Combine original video with TTS audio
+        command = [
+            FFMPEG_PATH, '-i', input_path, '-i', tts_path, '-c:v', 'copy', '-map', '0:v:0', '-map', '1:a:0', '-shortest', output_path
+        ]
+    else:
+        # Step 4: Combine original audio with TTS audio
+        command = [
+            FFMPEG_PATH, '-i', input_path, '-i', tts_path, '-filter_complex',
+            '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-ac', '2', output_path
+        ]
+
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     await process.communicate()
 
@@ -69,14 +76,14 @@ async def dub_voice(input_path, output_path, lang_code):
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Upload Audio for Dubbing", callback_data="upload_audio")],
+        [InlineKeyboardButton("Upload Media for Dubbing", callback_data="upload_media")],
         [InlineKeyboardButton("Select Language", callback_data="select_language")]
     ])
-    await message.reply_text("Welcome! Use the buttons below to upload an audio file for dubbing or to select a language.", reply_markup=keyboard)
+    await message.reply_text("Welcome! Use the buttons below to upload a media file for dubbing or to select a language.", reply_markup=keyboard)
 
-@app.on_callback_query(filters.regex("upload_audio"))
-async def upload_audio(client: Client, callback_query):
-    await callback_query.message.reply_text("Please send me an audio file with the /dub command to get it dubbed.")
+@app.on_callback_query(filters.regex("upload_media"))
+async def upload_media(client: Client, callback_query):
+    await callback_query.message.reply_text("Please send me an audio or video file with the /dub command to get it dubbed.")
 
 @app.on_callback_query(filters.regex("select_language"))
 async def select_language(client: Client, callback_query):
@@ -92,9 +99,9 @@ async def select_language(client: Client, callback_query):
 async def set_language(client: Client, callback_query):
     lang_code = callback_query.data.split("_")[1]
     user_language[callback_query.from_user.id] = lang_code
-    await callback_query.message.reply_text(f"Language set to {lang_code}. Now you can send an audio file with the /dub command.")
+    await callback_query.message.reply_text(f"Language set to {lang_code}. Now you can send a media file with the /dub command.")
 
-@app.on_message(filters.command("dub") & filters.audio)
+@app.on_message(filters.command("dub") & (filters.audio | filters.video))
 async def dub_anime(client: Client, message: Message):
     user_id = message.from_user.id
     if user_id not in user_language:
@@ -102,8 +109,8 @@ async def dub_anime(client: Client, message: Message):
         return
     
     lang_code = user_language[user_id]
-    audio = message.audio
-    file_path = await client.download_media(audio, file_name=os.path.join(UPLOAD_FOLDER, audio.file_name))
+    media = message.audio or message.video
+    file_path = await client.download_media(media, file_name=os.path.join(UPLOAD_FOLDER, media.file_name))
     
     input_path = file_path
     output_path = os.path.join(DUBBED_FOLDER, "dubbed_" + os.path.basename(file_path))
@@ -111,8 +118,11 @@ async def dub_anime(client: Client, message: Message):
     await message.reply_text("Dubbing in progress, please wait...")
     
     try:
-        await dub_voice(input_path, output_path, lang_code)
-        await message.reply_audio(audio=output_path, caption="Here's your dubbed audio!")
+        await dub_voice(input_path, output_path, lang_code, is_video=bool(message.video))
+        if message.audio:
+            await message.reply_audio(audio=output_path, caption="Here's your dubbed audio!")
+        else:
+            await message.reply_video(video=output_path, caption="Here's your dubbed video!")
     except Exception as e:
         await message.reply_text(f"An error occurred: {e}")
     finally:
@@ -120,7 +130,7 @@ async def dub_anime(client: Client, message: Message):
         if os.path.exists(output_path):
             os.remove(output_path)
 
-# Flask route to upload audio files
+# Flask route to upload media files
 @web_app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
@@ -147,8 +157,8 @@ def upload_file():
 def index():
     return '''
     <!doctype html>
-    <title>Upload Audio File</title>
-    <h1>Upload Audio File to Dub</h1>
+    <title>Upload Media File</title>
+    <h1>Upload Media File to Dub</h1>
     <form method=post enctype=multipart/form-data action="/upload">
       <input type=file name=file>
       <input type=submit value=Upload>
