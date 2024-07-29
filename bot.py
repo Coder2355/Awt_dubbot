@@ -103,6 +103,11 @@ async def dub_anime(client: Client, message: Message):
     media = message.audio or message.video
     file_path = await client.download_media(media, file_name=os.path.join(UPLOAD_FOLDER, media.file_name))
     
+    # Check if file was downloaded and has content
+    if os.path.getsize(file_path) == 0:
+        await message.reply_text("Downloaded file is empty")
+        return
+
     input_path = file_path
     output_path = os.path.join(DUBBED_FOLDER, "dubbed_" + os.path.basename(file_path))
     
@@ -117,7 +122,8 @@ async def dub_anime(client: Client, message: Message):
     except Exception as e:
         await message.reply_text(f"An error occurred: {e}")
     finally:
-        os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         if os.path.exists(output_path):
             os.remove(output_path)
 
@@ -132,6 +138,10 @@ def upload_file():
     file_path = os.path.join(UPLOAD_FOLDER, file.filename)
     file.save(file_path)
     
+    # Check if file was saved and has content
+    if os.path.getsize(file_path) == 0:
+        return "Uploaded file is empty", 400
+
     output_path = os.path.join(DUBBED_FOLDER, "dubbed_" + file.filename)
     try:
         asyncio.run(dub_voice(file_path, output_path, 'ta'))  # Default to Tamil for web uploads
@@ -139,7 +149,8 @@ def upload_file():
     except Exception as e:
         return str(e), 500
     finally:
-        os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
         if os.path.exists(output_path):
             os.remove(output_path)
 
