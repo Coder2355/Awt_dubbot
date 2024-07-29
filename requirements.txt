@@ -6,5 +6,5 @@ flask
 asyncio
 werkzeug>=2.3.3
 googletrans==4.0.0-rc1  # Use this specific version for compatibility
-google-cloud-speech
 gtts
+whisper
