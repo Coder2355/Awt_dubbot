@@ -3,10 +3,12 @@ import asyncio
 import subprocess
 from flask import Flask, request, send_from_directory
 from pyrogram import Client, filters
-from threading import Thread
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from config import API_ID, API_HASH, BOT_TOKEN, FFMPEG_PATH, UPLOAD_FOLDER, DUBBED_FOLDER, PORT
-from googletrans import Translator  # Google Translate for local Tamil translation
+from config import API_ID, API_HASH, BOT_TOKEN, FFMPEG_PATH, UPLOAD_FOLDER, DUBBED_FOLDER, PORT, GOOGLE_CLOUD_SPEECH_CREDENTIALS
+from googletrans import Translator
+from threading import Thread
+from google.cloud import speech_v1p1beta1 as speech
+from gtts import gTTS
 
 # Initialize the bot with your credentials
 app = Client("dub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -17,19 +19,31 @@ web_app = Flask(__name__)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DUBBED_FOLDER, exist_ok=True)
 
-# Asynchronous function to process audio
+def transcribe_audio(audio_file_path):
+    client = speech.SpeechClient.from_service_account_json(GOOGLE_CLOUD_SPEECH_CREDENTIALS)
+    with open(audio_file_path, 'rb') as audio_file:
+        content = audio_file.read()
+    
+    audio = speech.RecognitionAudio(content=content)
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=16000,
+        language_code="en-US",
+    )
+    
+    response = client.recognize(config=config, audio=audio)
+    return ' '.join([result.alternatives[0].transcript for result in response.results])
+
 async def dub_voice(input_path, output_path):
-    # Simulate voice cloning and translation process
-    translated_text = translator.translate('Hello, how are you?', dest='ta').text  # Dummy translation
-    command = [
-        FFMPEG_PATH, "-i", input_path,
-        "-vf", f"subtitles=subtitles.srt:text='{translated_text}'",  # Assuming subtitles.srt contains Tamil translations
-        output_path
-    ]
-    process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = await process.communicate()
-    if process.returncode != 0:
-        raise Exception(f"FFmpeg error: {stderr.decode()}")
+    # Step 1: Transcribe English audio to text
+    english_text = transcribe_audio(input_path)
+
+    # Step 2: Translate English text to Tamil text
+    translated_text = translator.translate(english_text, src='en', dest='ta').text
+
+    # Step 3: Convert Tamil text to speech
+    tts = gTTS(translated_text, lang='ta')
+    tts.save(output_path)
 
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
