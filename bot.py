@@ -45,16 +45,16 @@ async def dub_voice(input_path, output_path, lang_code, is_video=False):
     tts = gTTS(translated_text, lang=lang_code)
     tts.save(tts_path)
 
+    # Ensure that only the TTS audio is in the final output
     if is_video:
-        # Step 4: Combine original video with TTS audio
+        # Step 4: Combine original video with TTS audio, replacing audio
         command = [
             FFMPEG_PATH, '-i', input_path, '-i', tts_path, '-c:v', 'copy', '-map', '0:v:0', '-map', '1:a:0', '-shortest', output_path
         ]
     else:
-        # Step 4: Combine original audio with TTS audio
+        # Step 4: Replace original audio with TTS audio
         command = [
-            FFMPEG_PATH, '-i', input_path, '-i', tts_path, '-filter_complex',
-            '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-ac', '2', output_path
+            FFMPEG_PATH, '-i', tts_path, '-c:a', 'aac', output_path
         ]
 
     process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
