@@ -3,8 +3,8 @@ import asyncio
 import subprocess
 from flask import Flask, request, send_from_directory
 from pyrogram import Client, filters
-from threading import Thread
 from pyrogram.types import Message
+from threading import Thread
 from config import API_ID, API_HASH, BOT_TOKEN, FFMPEG_PATH, UPLOAD_FOLDER, DUBBED_FOLDER, PORT
 
 # Initialize the bot with your credentials
@@ -22,8 +22,10 @@ async def dub_voice(input_path, output_path):
         "-vf", "subtitles=subtitles.srt",  # Assuming subtitles.srt contains Tamil translations
         output_path
     ]
-    process = await asyncio.create_subprocess_exec(*command)
-    await process.communicate()
+    process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise Exception(f"FFmpeg error: {stderr.decode()}")
 
 @app.on_message(filters.command("dub") & filters.audio)
 async def dub_anime(client: Client, message: Message):
@@ -42,7 +44,8 @@ async def dub_anime(client: Client, message: Message):
         await message.reply_text(f"An error occurred: {e}")
     finally:
         os.remove(file_path)
-        os.remove(output_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
@@ -67,7 +70,8 @@ def upload_file():
         return str(e), 500
     finally:
         os.remove(file_path)
-        os.remove(output_path)
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
 # Flask route to serve the upload form
 @web_app.route('/')
