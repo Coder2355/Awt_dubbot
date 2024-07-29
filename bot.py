@@ -3,10 +3,10 @@ import asyncio
 import subprocess
 from flask import Flask, request, send_from_directory
 from pyrogram import Client, filters
+from threading import Thread
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, BOT_TOKEN, FFMPEG_PATH, UPLOAD_FOLDER, DUBBED_FOLDER, PORT, GOOGLE_CLOUD_SPEECH_CREDENTIALS
 from googletrans import Translator
-from threading import Thread
 from google.cloud import speech_v1p1beta1 as speech
 from gtts import gTTS
 
@@ -35,15 +35,34 @@ def transcribe_audio(audio_file_path):
     return ' '.join([result.alternatives[0].transcript for result in response.results])
 
 async def dub_voice(input_path, output_path):
+    # Convert input audio to WAV format for processing
+    wav_path = input_path.replace('.mp3', '.wav')
+    command = [FFMPEG_PATH, '-i', input_path, wav_path]
+    process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    await process.communicate()
+
     # Step 1: Transcribe English audio to text
-    english_text = transcribe_audio(input_path)
+    english_text = transcribe_audio(wav_path)
 
     # Step 2: Translate English text to Tamil text
     translated_text = translator.translate(english_text, src='en', dest='ta').text
 
     # Step 3: Convert Tamil text to speech
+    tts_path = output_path.replace('.mp3', '_tts.mp3')
     tts = gTTS(translated_text, lang='ta')
-    tts.save(output_path)
+    tts.save(tts_path)
+
+    # Step 4: Combine original audio with TTS audio
+    command = [
+        FFMPEG_PATH, '-i', input_path, '-i', tts_path, '-filter_complex',
+        '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-ac', '2', output_path
+    ]
+    process = await asyncio.create_subprocess_exec(*command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    await process.communicate()
+
+    # Clean up temporary files
+    os.remove(wav_path)
+    os.remove(tts_path)
 
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
