@@ -8,3 +8,4 @@ FFMPEG_PATH = 'ffmpeg'  # Adjust this path if FFmpeg is not in your PATH
 UPLOAD_FOLDER = 'uploads'
 DUBBED_FOLDER = 'dubbed'
 PORT = 8080
+GOOGLE_CLOUD_SPEECH_CREDENTIALS = 'path/to/your/google-cloud-speech-credentials.json'
