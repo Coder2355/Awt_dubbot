@@ -1,12 +1,8 @@
 ffmpeg-python
 tgcrypto
 aiohttp
-pyrogram==2.0.63
-aiofiles==23.1.0
-flask==2.3.2
+pyrogram
+flask
+asyncio
 werkzeug>=2.3.3
-pydub==0.25.1
-SpeechRecognition==3.8.1
-googletrans==4.0.0-rc1
-gtts==2.2.4
-blinker
+
